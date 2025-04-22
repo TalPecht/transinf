@@ -1,0 +1,56 @@
+```{r libraries, warning = FALSE, message = FALSE}
+# 1. load packages
+library(table1)
+library(flextable)
+library(common)
+library(naniar)
+library(dplyr)
+library(tidyverse)
+library(openxlsx)
+library(janitor)
+```
+# 2. Functions
+
+## p-values
+```{r}
+# Function for p-value calculations (non-parametric for continuous variables)
+pvalue.function <- function(x, ...) {
+  # Construct vectors of data y, and groups (strata) g
+  y <- unlist(x)
+  g <- factor(rep(1:length(x), times=sapply(x, length)))
+
+  # Check if the variable is numeric (continuous)
+  if (is.numeric(y)) {
+    # For more than two groups, perform Kruskal-Wallis test (non-parametric)
+    if (length(unique(g)) > 2) {
+      p <- kruskal.test(y ~ g)$p.value
+      print("kruskal")
+      return(paste0(format.pval(p, digits=3, eps=0.001), supsc('k'))) # 'k' for Kruskal-Wallis
+    } else {
+      # For two groups, perform Wilcoxon test (non-parametric)
+      p <- wilcox.test(y ~ g)$p.value
+      print("wilcox")
+      return(paste0(format.pval(p, digits=3, eps=0.001), supsc('w'))) # 'w' for Wilcoxon test
+    }
+  } else {
+    # For categorical variables, always perform Fisher's Exact Test
+    mytab <- table(y, g)
+    print("fischers")
+    p <- fisher.test(mytab)$p.value
+    
+    # Apply a small tolerance when checking if p is 1
+    if (abs(p - 1) < .Machine$double.eps^0.5) {
+      formatted_p <- "1"
+    } else if (p < 0.001) {
+      formatted_p <- "<0.001"
+    } else if (p >= 0.001 && p < 0.002) {
+      formatted_p <- "0.001"
+    } else {
+      formatted_p <- sprintf("%.3f", p)
+    }
+    
+    return(c("", paste0(formatted_p, supsc('f'))))
+  }
+}
+```
+
