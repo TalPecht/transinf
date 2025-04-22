@@ -286,84 +286,107 @@ scaleColors <- function(data = input_scale, # data to use
 
 ### ... PCA
 ```{r}
-plotPCAnew<-         function (pca_input = dds_vst,
+plotPCAnew  <-        function (pca_input = dds_vst, # rows are the variables
                                 ntop = "all",
                                 xPC = 1, 
                                 yPC = 2,
                                 point_size=3,
-                                anno_colour,
-                                scale = FALSE, 
-                                anno = sample_annotation, 
                                 color,
+                                anno_colour,
+                                scale = FALSE, center = TRUE, 
+                                anno = sample_annotation, 
                                 shape = NULL,
                                 title="PCA", 
                                 label = NULL, 
                                 label_subset = NULL, 
-                                facet=NULL,
+                                split_by= "NULL",
                                 outliers = FALSE,
                                 SD = 3, 
                                 exclude = NULL,
                                 outlier.ellipse= NULL,
                                 color.ellipse= FALSE,
                                 p.outlier=0.001, 
-                                Scale = F
+                                id.col = "ID", marginal_histogram = FALSE, output = FALSE
 ){
   
+  require(ggplot2)
+  require(stats)
+  require(ggrepel)
+  require(viridis)
   
   if(!is.data.frame(pca_input) & !is.matrix(pca_input) ){
     vst_matrix <-as.matrix(assay(pca_input))
   }else{
-    vst_matrix <- pca_input
+    vst_matrix <- as.matrix(pca_input)
   }
+  
   
   
   if (!is.null(exclude)==TRUE){
     print(paste0("samples ",exclude,"are excluded from analysis"))
     #delete from vst_matrix
-    vst_matrix<- vst_matrix[,which(!colnames(vst_matrix) %in% exclude)]
+    vst_matrix<- vst_matrix[which(!rownames(vst_matrix) %in% exclude),]
     #delete from anno
     anno<-anno[which(!rownames(anno) %in% exclude),]
   }
   
+  ## exclude parameters with missing values
+  if(sum(is.na(vst_matrix))>0){
+    ## find which parameters contain missing values
+    vars_missing <-  rowSums(is.na(vst_matrix))
+    vars_missing <- names(vars_missing[vars_missing>0])
+    
+    ## exclude pars with missing values
+    vst_matrix <- vst_matrix[which(!rownames(vst_matrix) %in% vars_missing),]
+    
+    ## print msg
+    print(paste(length(vars_missing),"parameters with missing values are excluded: ",paste(vars_missing, collapse = ", "), collapse = " "))
+    
+  } else {
+    print("there are no missing values in the data, all parameters will be used")
+  }
+  
   if(ntop=="all"){
-    pca <- prcomp(t(vst_matrix), scale. = Scale) 
+    pca <- prcomp(t(vst_matrix), scale. = scale, center = center) 
   }else if (is.numeric(ntop)){
     # select the ntop genes by variance
     select <- order(rowVars(vst_matrix), decreasing=TRUE)[c(1:ntop)]
-    pca <- prcomp(t(vst_matrix[select,]), scale. = Scale)
+    pca <- prcomp(t(vst_matrix[select,]), scale. = scale , center = center)
+  } else if (is.character(ntop)){
+    pca <- prcomp(t(vst_matrix[ntop,]), scale. = scale, center = center)
   } else {
-    pca <- prcomp(t(vst_matrix[ntop,]), scale. = Scale)
+    print("option for ntop is not valid")
   }
+  
   
   #calculate explained variance per PC
   explVar <- pca$sdev^2/sum(pca$sdev^2)
   # transform variance to percent
   percentVar <- round(100 * explVar[c(xPC,yPC)], digits=1)
-  
+
+  # make sure annotation table is ordered the same as the data
+  anno <- anno[match(rownames(pca$x),anno[[id.col]]),]
+
   # Define data for plotting  
   pcaData <- data.frame(xPC=pca$x[,xPC], 
                         yPC=pca$x[,yPC], 
                         color = anno[[color]],
-                        name= as.character(anno$ID),
+                        name= as.character(anno[[id.col]]),
                         stringsAsFactors = F)
-  
+
   #plot PCA
-  
-  if (!is.null(facet)==TRUE){
-    pcaData$facet_var<-anno[[facet]]
-  } else {
-    pcaData<-pcaData
-  }
   
   if(is.factor(pcaData$color) || is.character(pcaData$color)|| is.integer(pcaData$color)){
     if(is.null(shape)==TRUE){
       pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
-        geom_point(size =point_size, aes(color= color))
+        geom_point(size =point_size, aes(color= color))+
+        theme(legend.position = "none")
     }else{
       pcaData$shape = anno[[shape]]
       pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
         geom_point(size =point_size, aes(color=color, shape=shape)) +
-        scale_shape_discrete(name=shape)
+        scale_shape_discrete(name=shape)+
+        theme(legend.position = "none")
     }
     
     if(is.null(anno_colour[1])==TRUE){
@@ -376,12 +399,12 @@ plotPCAnew<-         function (pca_input = dds_vst,
     if(is.null(shape) == TRUE){
       pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
         geom_point(size =point_size, aes(color=color)) +
-        scale_color_gradientn(colours = bluered(100),name=color)
+        scale_color_viridis_c(name = color)
     }else{
       pcaData$shape = anno[[shape]]
       pca_plot <- ggplot(pcaData, aes(x = xPC, y = yPC)) +
         geom_point(size =point_size, aes(colour=color, shape=shape)) +
-        scale_color_gradientn(colours = bluered(100),name=color)+
+        scale_color_viridis_c(name = color)+
         scale_shape_discrete(name=shape)
     }
   }
@@ -390,51 +413,10 @@ plotPCAnew<-         function (pca_input = dds_vst,
   if (outliers==TRUE){
     print ("only outliers will be labeled")
     
-    #Mahalanobis distance - add this
+    # Mahalanobis distance 
     pcaData$m_dist<-mahalanobis(pcaData[,c("xPC","yPC")], colMeans(pcaData[,c("xPC","yPC")]), cov(pcaData[,c("xPC","yPC")]))
     pcaData$p <- pchisq(pcaData$m_dist, df=SD, lower.tail=FALSE)
     
-    # #PC1 outliers
-    # table1<-as.data.frame(pcaData[,xPC])
-    # rownames(table1)<-pcaData$name
-    # table1$outlier<-NA
-    # 
-    # PC1_mean<-mean(as.numeric(table1[,1]))
-    # PC1_SD<-sd(as.numeric(table1[,1]))
-    # PC1_up<-PC1_mean+SD*PC1_SD
-    # PC1_dn<-PC1_mean-SD*PC1_SD
-    # 
-    # table1[,2]<-apply(table1,1,function(z){
-    #   if (z[1]>PC1_up | z[1]<PC1_dn){
-    #     "outlier"
-    #   } else {
-    #     ""
-    #   } 
-    # })
-    # 
-    # 
-    # outliers_PC1<-rownames(table1[which(table1$outlier=="outlier"),])
-    # 
-    # #PC2 outliers
-    # table2<-as.data.frame(pcaData[,yPC])
-    # rownames(table2)<-pcaData$name
-    # table2$outlier<-NA
-    # 
-    # PC2_mean<-mean(as.numeric(table2[,1]))
-    # PC2_SD<-sd(as.numeric(table2[,1]))
-    # PC2_up<-PC2_mean+SD*PC2_SD
-    # PC2_dn<-PC2_mean-SD*PC2_SD
-    # 
-    # table2[,2]<-apply(table2,1,function(z){
-    #   if (z[1]>PC2_up | z[1]<PC2_dn){
-    #     "outlier"
-    #   } else {
-    #     ""
-    #   } 
-    # })
-    # 
-    # outliers_PC2<-rownames(table2[which(table2$outlier=="outlier"),])
-    # 
     # add column label for the pcaData
     pcaData$label <- ifelse(pcaData$p<p.outlier,pcaData$name,"")
     
@@ -461,17 +443,7 @@ plotPCAnew<-         function (pca_input = dds_vst,
     ylab(paste0("PC ",yPC,": ", percentVar[2], "% variance")) +
     coord_fixed()+
     theme_classic()+        
-    theme(aspect.ratio = 1)+
-    ggtitle(title)
-  
-  
-  
-  #add facet if required
-  if (is.null(facet)==TRUE){
-    pca_plot<-pca_plot
-  } else {
-    pca_plot<-pca_plot + facet_wrap(.~facet_var)
-  }
+    theme(aspect.ratio = 1)
   
   #add ellipse if required
   if(!is.null(outlier.ellipse)==TRUE){
@@ -483,7 +455,41 @@ plotPCAnew<-         function (pca_input = dds_vst,
     pca_plot <- pca_plot + stat_ellipse(type = "norm",aes(color=color))
   }
   
-  pca_plot
+  ## marginal histograms
+  if(marginal_histogram == TRUE) {
+    
+     # Calculate p-values
+  p_value_PC1 <- t.test(xPC ~ color, data = pcaData)$p.value
+  p_value_PC2 <- t.test(yPC ~ color, data = pcaData)$p.value
+  
+  # Format p-value annotations
+  p_annotation_PC1 <- ifelse(p_value_PC1 < 0.001, "***", ifelse(p_value_PC1 < 0.01, "**", "ns"))
+  p_annotation_PC2 <- ifelse(p_value_PC2 < 0.001, "***", ifelse(p_value_PC2 < 0.01, "**", "ns"))
+  
+    # Dot plot
+  pca_plot <- pca_plot+coord_fixed()+
+    theme(aspect.ratio = 1, legend.position = "bottom")+
+    ggtitle(paste0(title, "\nPC1 (P =", round(p_value_PC1, 4),",", p_annotation_PC1, ")","\nPC2 (P =", round(p_value_PC2, 4),",", p_annotation_PC2, ")"))
+  
+   # Adding density or split option
+    pca_plot <- ggMarginal(pca_plot, groupFill = TRUE, type = "density")
+  } else if (split_by != "NULL") {
+    pca_plot <- pca_plot + facet_wrap(~pcaData[[split_by]])
+  } else {
+    pca_plot <- pca_plot +
+    ggtitle(title)+
+      theme(legend.position = "right")
+  }
+  
+  if(output){
+    output <- list(plot = pca_plot, pca = pca, pcaData = pcaData)
+    print(pca_plot)
+    return(output)
+  } else {
+    print(pca_plot)
+  }
+  
+  
 }
 
 # PCA explained variance plot
