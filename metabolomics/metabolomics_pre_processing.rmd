@@ -1,0 +1,390 @@
+---
+title: "pre_processing_metabolomics"
+author: "TP"
+date: "2024-11-30"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# 0. Packages
+```{r}
+library(ggplot2)
+library(dplyr)
+library(UpSetR)
+library(naniar)
+```
+
+
+# 1. Load data
+## ** metabolomics
+```{r}
+metabo <- read.delim("./240323_metabolomics_ionmatrix_withannotation_avg.txt", header = T)
+rownames(metabo) <- metabo$ionIdx
+head(metabo)
+```
+
+```{r}
+metabo_mtx <- metabo[,c(7:ncol(metabo))]
+rownames(metabo_mtx) <- metabo$ionMz
+rownames(metabo_mtx)[1:10]
+all(sapply(metabo_mtx, is.numeric))
+```
+```{r}
+head(metabo_mtx)
+```
+
+```{r}
+dim(metabo_mtx)
+```
+
+```{r}
+metabo_anno <- metabo[,c(1:6)]
+metabo_anno$ion_name <- paste0("ion_",metabo_anno$ionIdx)
+head(metabo_anno)
+```
+
+
+
+
+## ion annotation
+```{r}
+ion_anno <- read.delim("./240324_ion_anno.txt", header = T)
+
+head(ion_anno)
+```
+### add database
+```{r}
+ion_anno$database <- "KEGG"
+ion_anno[grepl("CHEBI", ion_anno$CompoundID),"database"] <- "ChEBI"
+ion_anno[grepl("HMDB", ion_anno$CompoundID),"database"] <- "HMDB"
+```
+
+### add source annotation
+```{r}
+## how many samples are from which database
+count_ids_perdatabase <- ion_anno %>%
+                          group_by(database) %>%
+                          summarize(count.idx = n_distinct(ionMz))
+
+count_ids_perdatabase <- as.data.frame(count_ids_perdatabase)
+
+ggplot(count_ids_perdatabase, aes(x= database, y= count.idx))+
+  geom_bar(stat = "identity")+
+  geom_text(aes(label = count.idx), color = "white", vjust = 1)+
+  theme(aspect.ratio = 1.5)
+```
+```{r}
+list_database <- split(
+  ion_anno$ionMz, 
+  ion_anno$database
+)
+
+UpSetR::upset(fromList(list_database))
+```
+*--> unique peaks for each database will remain with this database*
+*--> peaks that are shared between ChEBI and KEGG or HMDB --> will be annotated by KEGG or HMDB*
+*--> the rest - which are shared with HMDB will be annotated by HMDB*
+
+```{r}
+database_mtx <- as.data.frame( ComplexHeatmap::list_to_matrix(list_database))
+
+head(database_mtx)
+```
+
+```{r}
+database_mtx[database_mtx$ChEBI == 1,"ChEBI"] <- "ChEBI"
+database_mtx[database_mtx$ChEBI == 0,"ChEBI"] <- ""
+
+database_mtx[database_mtx$HMDB == 1,"HMDB"] <- "HMDB"
+database_mtx[database_mtx$HMDB == 0,"HMDB"] <- ""
+
+database_mtx[database_mtx$KEGG == 1,"KEGG"] <- "KEGG"
+database_mtx[database_mtx$KEGG == 0,"KEGG"] <- ""
+
+head(database_mtx)
+
+```
+
+```{r}
+database_mtx$intersect <- apply(database_mtx,1,paste, collapse = "")
+database_mtx$ionMz <- rownames(database_mtx)
+
+head(database_mtx)
+```
+
+### Annoate by HMDB
+```{r}
+annotate_list <- split(
+  database_mtx$ionMz,
+  database_mtx$intersect
+)
+
+str(annotate_list)
+```
+
+```{r}
+ion_annotation_tal <- list()
+
+## 1. chebi
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$ChEBI,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "ChEBI"
+
+ion_annotation_tal[["ChEBI"]] <- tmp
+
+# ==========================================
+
+## 2. KEGG
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$KEGG,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "KEGG"
+
+ion_annotation_tal[["KEGG"]] <- tmp
+
+# ==========================================
+
+## 3. HMDB
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$HMDB,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "HMDB"
+
+ion_annotation_tal[["HMDB"]] <- tmp
+
+# ==========================================
+
+## 4. ChEBIKEGG
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$ChEBIKEGG,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(database == "KEGG") %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "ChEBIKEGG"
+
+ion_annotation_tal[["ChEBIKEGG"]] <- tmp
+
+# ==========================================
+
+## 5. ChEBIHMDB
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$ChEBIHMDB,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(database == "HMDB") %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "ChEBIHMDB"
+
+ion_annotation_tal[["ChEBIHMDB"]] <- tmp
+
+# ===========================================
+
+## 6. HMDBKEGG
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$HMDBKEGG,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(database == "HMDB") %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "HMDBKEGG"
+
+ion_annotation_tal[["HMDBKEGG"]] <- tmp
+
+# ============================================
+
+## 7. ChEBIHMDBKEGG
+tmp <- NULL
+tmp <- ion_anno[ion_anno$ionMz %in% annotate_list$ChEBIHMDBKEGG,]
+
+tmp <- tmp %>%
+  group_by(ionMz) %>%
+  filter(database == "HMDB") %>%
+  filter(row_number()==1)
+
+tmp$annotation <- "ChEBIHMDBKEGG"
+
+ion_annotation_tal[["ChEBIHMDBKEGG"]] <- tmp
+```
+
+```{r}
+melt_annotation_tal <- bind_rows(ion_annotation_tal)
+melt_annotation_tal <- as.data.frame(melt_annotation_tal)
+rownames(melt_annotation_tal) <- melt_annotation_tal$ionMz
+## add ionIndx 
+melt_annotation_tal <- melt_annotation_tal[order(melt_annotation_tal$ionMz, decreasing = F),]
+melt_annotation_tal$ionInx <- c(1:nrow(melt_annotation_tal))
+
+## as.data.frame
+melt_annotation_tal <- as.data.frame(melt_annotation_tal)
+
+nrow(melt_annotation_tal) == length(unique(ion_anno$ionMz))
+```
+
+```{r}
+ggplot(melt_annotation_tal, aes(x= database))+
+  geom_bar(stat = "count")+
+  geom_text(vjust =1, color = "white", aes(label = after_stat(count)), stat = "count")
+```
+
+### ... use manual converstion to HMDB from metaboanalyst
+was done on 27.3.24
+* CHEBI annotations had no results
+* KEGG annotations were partical
+```{r}
+kegg_to_hmdb <- read.csv("./240327_keggtohmdb_metaboanalyst.csv")
+colnames(kegg_to_hmdb)[1] <- "kegg_id"
+
+
+```
+```{r}
+nrow(kegg_to_hmdb[!is.na(kegg_to_hmdb$HMDB),])
+melt_annotation_tal$kegg_to_hmdb <- kegg_to_hmdb[match(melt_annotation_tal$CompoundID, kegg_to_hmdb$kegg_id),"HMDB"]
+```
+
+
+which KEGG ids were not found at all? 
+these will be removed from the metabolites 
+```{r}
+kegg_miss <- kegg_to_hmdb[is.na(kegg_to_hmdb$KEGG),"kegg_id"]
+length(kegg_miss)
+kegg_miss[1:10]
+```
+```{r}
+melt_annotation_tal$kegg_miss <- NA
+melt_annotation_tal[which(melt_annotation_tal$CompoundID %in% kegg_miss),"kegg_miss"] <- "missing"
+```
+
+since all CHEBI were not found in the database
+
+### ... NEW anno: compound ID kegg to hmdb and exclude CHEBI
+```{r}
+## exclude chebi
+melt_annotation_tal_new <- melt_annotation_tal[which(melt_annotation_tal$database != "ChEBI"),]
+
+melt_annotation_tal_new <- melt_annotation_tal_new[is.na(melt_annotation_tal_new$kegg_miss),]
+
+melt_annotation_tal_new$CompoundID_new <- ifelse(
+  melt_annotation_tal_new$database == "HMDB", melt_annotation_tal_new$CompoundID,
+  ifelse(melt_annotation_tal_new$database == "KEGG", melt_annotation_tal_new$kegg_to_hmdb,NA)
+)
+
+## exclude those with no new CompoundID
+melt_annotation_tal_new <- melt_annotation_tal_new[!is.na(melt_annotation_tal_new$CompoundID_new),]
+
+melt_annotation_tal_new$database_new <- ifelse(grepl("HMDB", melt_annotation_tal_new$CompoundID_new), "HMDB", "error")
+
+head(melt_annotation_tal_new)
+```
+
+```{r}
+ggplot(melt_annotation_tal_new, aes(x= database_new))+
+  geom_bar(stat = "count")+
+  geom_text(vjust =-1, color = "red", aes(label = after_stat(count)), stat = "count")
+```
+## New metabo_mtx 
+```{r}
+metabo_mtx_full <- metabo[,c(7:ncol(metabo))]
+rownames(metabo_mtx_full) <- metabo$ionMz
+head(metabo_mtx_full)
+```
+
+```{r}
+metabo_mtx <- metabo_mtx_full[which(rownames(metabo_mtx_full) %in% as.character(melt_annotation_tal_new$ionMz)),]
+
+
+head(metabo_mtx)
+```
+```{r}
+all(as.character(melt_annotation_tal_new$ionMz) %in% rownames(metabo_mtx))
+```
+
+
+
+# 2. Injection order
+```{r }
+injections <- read.delim("./240324_injection_order.txt", header = T)
+
+injections$type <- "sample"
+
+injections[grepl("pSS",injections$ID),"type"] <- "pSS"
+
+injections$y <- ifelse(injections$type == "sample",1,2)
+
+ggplot(injections, aes(x= order, y= y, color= type))+
+  geom_point(size = 1)+
+  scale_color_manual(values = c("sample" = "black", "pSS" = "red"))+
+  ylim(0,5)
+```
+
+
+
+# 3. Pre processing
+https://labplan.ie/content/uploads/2018/01/Biocrates-Tutorial-MetaboAnalyst-V01.pdf
+I chose to only perform log2 transformation without pareto scaling to avoid problems with data analysis. 
+
+## Log2 normalization
+```{r fig.width=20}
+#boxplot metabolites before normalization
+boxplot(metabo_mtx)
+```
+
+
+```{r fig.width=15}
+#200 metabolites example plot before normalization
+boxplot(t(metabo_mtx[1:200,]))
+```
+
+
+```{r}
+#log2 normalization of metabolites
+metabo_log2<-apply(metabo_mtx,2, function(x){log2(x+1)})
+rownames(metabo_log2)<-rownames(metabo_mtx)
+```
+
+```{r}
+## visualize distribution of samples after log2 transformation
+hist(metabo_log2, breaks = 50, freq=FALSE)
+curve(dnorm(x,mean=mean(metabo_log2),sd=sd(metabo_log2)), add=TRUE,col="red")
+```
+```{r}
+vis_miss(as.data.frame(metabo_log2))
+```
+
+
+
+
+### metabolites boxplot
+
+```{r fig.width=20}
+topvar_metabo<- order(Rfast::colVars(metabo_log2), decreasing = T)[1:50]
+boxplot(metabo_log2[,topvar_metabo])
+```
+
+# 4. Session info
+```{r}
+sessionInfo()
+```
+
